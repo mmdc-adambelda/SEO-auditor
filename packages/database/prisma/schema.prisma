@@ -1,0 +1,469 @@
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../generated/client"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum AuditStatus {
+  PENDING
+  CRAWLING
+  ANALYZING
+  GENERATING_REPORT
+  COMPLETED
+  FAILED
+}
+
+enum IssueSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum IssueCategory {
+  TECHNICAL
+  ON_PAGE
+  PERFORMANCE
+  CONTENT
+  LINKS
+  IMAGES
+  SECURITY
+}
+
+enum IssueType {
+  MISSING_TITLE
+  DUPLICATE_TITLE
+  TITLE_TOO_LONG
+  TITLE_TOO_SHORT
+  MISSING_META_DESCRIPTION
+  DUPLICATE_META_DESCRIPTION
+  META_DESCRIPTION_TOO_LONG
+  META_DESCRIPTION_TOO_SHORT
+  MISSING_H1
+  MULTIPLE_H1
+  MISSING_ALT_TEXT
+  BROKEN_LINK
+  REDIRECT_CHAIN
+  REDIRECT_LOOP
+  MISSING_CANONICAL
+  CANONICAL_MISMATCH
+  NOINDEX
+  MISSING_SITEMAP
+  INVALID_SITEMAP
+  MISSING_ROBOTS_TXT
+  HTTP_NOT_HTTPS
+  MIXED_CONTENT
+  SLOW_PAGE
+  LARGE_IMAGE
+  MISSING_STRUCTURED_DATA
+  DUPLICATE_CONTENT
+  LOW_WORD_COUNT
+  ORPHAN_PAGE
+  CRAWL_DEPTH_ISSUE
+  HREFLANG_ISSUE
+  MISSING_VIEWPORT
+  LARGE_DOM
+  NO_HTTPS_REDIRECT
+}
+
+enum KeywordIntent {
+  INFORMATIONAL
+  NAVIGATIONAL
+  COMMERCIAL
+  TRANSACTIONAL
+}
+
+enum KeywordType {
+  PRIMARY
+  SECONDARY
+  LONG_TAIL
+  QUESTION
+}
+
+enum OpportunityCategory {
+  QUICK_WIN
+  MEDIUM_DIFFICULTY
+  HIGH_VALUE
+}
+
+enum ReportGrade {
+  A_PLUS
+  A
+  B_PLUS
+  B
+  C_PLUS
+  C
+  D
+  F
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model AuditJob {
+  id     String      @id @default(cuid())
+  url    String
+  domain String?
+  title  String?
+
+  status      AuditStatus @default(PENDING)
+  progress    Float       @default(0)
+  statusMsg   String?
+  errorMsg    String?
+
+  // Configuration
+  crawlDepth Int @default(5)
+  maxPages   Int @default(500)
+
+  // Category Scores (0-100)
+  overallScore     Float?
+  technicalScore   Float?
+  contentScore     Float?
+  performanceScore Float?
+  authorityScore   Float?
+  uxScore          Float?
+
+  // Crawl stats
+  pagesCrawled   Int @default(0)
+  pagesIndexable Int @default(0)
+  totalIssues    Int @default(0)
+  criticalIssues Int @default(0)
+
+  // Site-level technical flags
+  hasSitemap       Boolean @default(false)
+  hasRobotsTxt     Boolean @default(false)
+  sitemapUrl       String?
+  robotsTxtContent String? @db.Text
+  isHttps          Boolean @default(false)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  crawledPages    CrawledPage[]
+  technicalIssues TechnicalIssue[]
+  keywords        KeywordOpportunity[]
+  competitors     Competitor[]
+  report          AuditReport?
+  cwvData         CoreWebVitals?
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([domain])
+}
+
+model CrawledPage {
+  id         String   @id @default(cuid())
+  auditJobId String
+  auditJob   AuditJob @relation(fields: [auditJobId], references: [id], onDelete: Cascade)
+
+  url         String
+  finalUrl    String? // After redirects
+  statusCode  Int?
+  contentType String?
+  wordCount   Int?
+  loadTime    Float? // in ms
+
+  // On-page SEO fields
+  title          String?
+  titleLength    Int?
+  metaDescription String?
+  metaDescLength Int?
+  h1Count        Int?
+  h2Count        Int?
+  h3Count        Int?
+  h1Text         String?
+  h2Texts        String[]
+  lang           String?
+
+  // Technical flags
+  canonical          String?
+  robots             String?
+  noindex            Boolean @default(false)
+  nofollow           Boolean @default(false)
+  isIndexable        Boolean @default(true)
+  hasViewport        Boolean @default(false)
+  isHttps            Boolean @default(false)
+  hasMixedContent    Boolean @default(false)
+  hasStructuredData  Boolean @default(false)
+  structuredDataTypes String[]
+
+  // Hreflang
+  hreflangTags Json?
+
+  // Content quality
+  readabilityScore Float?
+  keywordDensity   Float?
+  topKeywords      Json?
+
+  // Images
+  totalImages      Int?
+  imagesWithoutAlt Int?
+  largeImages      Int? // over size threshold
+
+  // Links
+  internalLinks Int?
+  externalLinks Int?
+  brokenLinks   Int?
+  linkDepth     Int? // click depth from homepage
+
+  // Scores
+  onPageScore Float?
+
+  // Raw HTML stored for diff analysis (compressed)
+  contentHash String? // SHA256 for duplicate detection
+
+  createdAt DateTime @default(now())
+
+  issues         PageIssue[]
+  onPageAnalysis OnPageAnalysis?
+
+  @@index([auditJobId])
+  @@index([url])
+  @@index([statusCode])
+  @@index([contentHash])
+}
+
+model PageIssue {
+  id     String      @id @default(cuid())
+  pageId String
+  page   CrawledPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  type           IssueType
+  severity       IssueSeverity
+  category       IssueCategory
+  title          String
+  description    String        @db.Text
+  recommendation String?       @db.Text
+  value          String? // The actual value that caused the issue
+
+  createdAt DateTime @default(now())
+
+  @@index([pageId])
+  @@index([severity])
+}
+
+model TechnicalIssue {
+  id         String   @id @default(cuid())
+  auditJobId String
+  auditJob   AuditJob @relation(fields: [auditJobId], references: [id], onDelete: Cascade)
+
+  type     IssueType
+  category IssueCategory
+  severity IssueSeverity
+
+  title       String
+  description String   @db.Text
+  affectedUrl String?
+  affectedUrls String[]
+  count       Int       @default(1)
+
+  // AI-enriched fields
+  recommendation      String?  @db.Text
+  businessImpact      String?  @db.Text
+  seoImpact           String?  @db.Text
+  implementationSteps String[]
+  estimatedImpact     String?
+
+  impactScore Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([auditJobId])
+  @@index([severity])
+  @@index([category])
+  @@index([type])
+}
+
+model OnPageAnalysis {
+  id     String      @id @default(cuid())
+  pageId String      @unique
+  page   CrawledPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  // Title analysis
+  titleOptimal Boolean?
+  titleKeyword Boolean?
+  titleScore   Float?
+
+  // Meta description
+  metaOptimal Boolean?
+  metaScore   Float?
+
+  // Headers
+  hasH1           Boolean?
+  multipleH1      Boolean?
+  headerStructure Json?
+  headerScore     Float?
+
+  // Content
+  contentScore     Float?
+  keywordDensity   Float?
+  readingLevel     String?
+  topKeywords      Json?
+  semanticScore    Float?
+
+  // Images
+  imageOptimization Float?
+  imageScore        Float?
+
+  // Internal linking
+  linkDepth         Int?
+  anchorTextQuality Float?
+  linkScore         Float?
+
+  overallScore Float?
+
+  createdAt DateTime @default(now())
+}
+
+model CoreWebVitals {
+  id         String   @id @default(cuid())
+  auditJobId String   @unique
+  auditJob   AuditJob @relation(fields: [auditJobId], references: [id], onDelete: Cascade)
+
+  // Mobile metrics (in ms / unitless for CLS)
+  mobileLcp   Float?
+  mobileCls   Float?
+  mobileInp   Float?
+  mobileFcp   Float?
+  mobileTtfb  Float?
+  mobileScore Float?
+
+  // Desktop metrics
+  desktopLcp   Float?
+  desktopCls   Float?
+  desktopInp   Float?
+  desktopFcp   Float?
+  desktopTtfb  Float?
+  desktopScore Float?
+
+  // Performance opportunities (JSON array)
+  opportunities Json?
+  diagnostics   Json?
+
+  // Raw PSI responses
+  mobileRaw  Json?
+  desktopRaw Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([auditJobId])
+}
+
+model KeywordOpportunity {
+  id         String   @id @default(cuid())
+  auditJobId String
+  auditJob   AuditJob @relation(fields: [auditJobId], references: [id], onDelete: Cascade)
+
+  keyword      String
+  searchVolume Int?
+  difficulty   Float?
+  cpc          Float?
+  intent       KeywordIntent?
+  type         KeywordType?
+
+  opportunityScore Float?
+  category         OpportunityCategory?
+
+  currentRanking Int?
+  targetUrl      String?
+
+  // Trend data
+  trend        String? // 'rising', 'stable', 'falling'
+  monthlyTrend Json?  // array of monthly volumes
+
+  createdAt DateTime @default(now())
+
+  @@index([auditJobId])
+  @@index([category])
+  @@index([opportunityScore])
+}
+
+model Competitor {
+  id         String   @id @default(cuid())
+  auditJobId String
+  auditJob   AuditJob @relation(fields: [auditJobId], references: [id], onDelete: Cascade)
+
+  domain String
+  url    String?
+
+  // Metrics from DataForSEO
+  organicKeywords Int?
+  topPages        Int?
+  backlinks       Int?
+  domainAuthority Float?
+  monthlyTraffic  Int?
+
+  // Content strategy
+  avgWordCount  Int?
+  contentTopics Json?
+  topPages_data Json? // array of top ranking pages
+
+  // Comparison vs target
+  commonKeywords  Int?
+  uniqueKeywords  Int?
+  gapKeywords     Json? // keywords competitor ranks for but target doesn't
+  contentGaps     Json?
+
+  overallScore Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([auditJobId])
+  @@index([domain])
+}
+
+model AuditReport {
+  id         String   @id @default(cuid())
+  auditJobId String   @unique
+  auditJob   AuditJob @relation(fields: [auditJobId], references: [id], onDelete: Cascade)
+
+  grade        ReportGrade?
+  overallScore Float?
+
+  criticalIssues  Json?
+  highPriorityFixes Json?
+  quickWins       Json?
+  longTermOpps    Json?
+
+  executiveSummary String? @db.Text
+  aiInsights       String? @db.Text
+
+  // Export paths
+  pdfPath  String?
+  csvPath  String?
+  jsonPath String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── User / Auth (optional multi-tenancy) ────────────────────────────────────
+
+model User {
+  id    String @id @default(cuid())
+  email String @unique
+  name  String?
+
+  passwordHash String?
+  apiKey       String?  @unique
+
+  plan      String  @default("free")
+  auditQuota Int    @default(10)
+  auditUsed  Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([apiKey])
+}
