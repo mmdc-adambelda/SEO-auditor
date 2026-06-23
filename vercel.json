@@ -1,0 +1,7 @@
+{
+  "framework": "nextjs",
+  "installCommand": "npm install -g pnpm@9 && pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @seo-auditor/web build",
+  "outputDirectory": "apps/web/.next",
+  "ignoreCommand": "git diff HEAD^ HEAD --quiet -- apps/web packages/shared"
+}
